@@ -481,7 +481,9 @@ if "panel" in tab_dict:
                     yaxis_title="Cantidad (abs)",
                     margin=dict(l=40, r=20, t=50, b=40),
                 )
-            st.plotly_chart(fig_top, use_container_width=True)
+                st.plotly_chart(fig_top, use_container_width=True)
+            else:
+                st.info("No hay registros de salidas para mostrar el top de productos.")
 
             # ==== Nuevos gráficos de stock por categoría y tipo ====
             # Si el catálogo tiene una columna "Categoria", mostrar el stock teórico
