@@ -1149,7 +1149,7 @@ if "auditoria_diaria" in tab_dict:
                                         "",
                                         value=0,
                                         step=1,
-                                        format="%d"
+                                        format="%d",
                                         min_value=None,
                                         key=f"aud_fisico_{fecha_audit}_{turno}_{ubic}_{prod}_{i}"
                                     )
