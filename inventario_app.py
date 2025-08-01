@@ -654,7 +654,7 @@ if "entradas" in tab_dict:
                     if registrar:
                         # Preparar registro de entrada
                         dt = datetime.combine(fecha, hora)
-                        registro = pd.DataFrame(
+                        registro_inv = pd.DataFrame(
                             [
                                 {
                                     "Fecha": dt,
@@ -666,13 +666,20 @@ if "entradas" in tab_dict:
                                 }
                             ]
                         )
-                        # Actualizar inventario
-                        actualizar_inventario_registro(st.session_state["Inventario"], registro)
-                        # Actualizar hoja específica de entradas
+                        # Actualizar inventario (historial general)
+                        actualizar_inventario_registro(
+                            st.session_state["Inventario"], registro_inv
+                        )
+
+                        # Registrar en la hoja Entradas sin la columna "Tipo"
+                        registro_entradas = registro_inv.drop(columns=["Tipo"])
                         df_entradas = st.session_state["Entradas"]
-                        df_entradas = pd.concat([df_entradas, registro], ignore_index=True)
+                        df_entradas = pd.concat(
+                            [df_entradas, registro_entradas], ignore_index=True
+                        )
                         st.session_state["Entradas"] = df_entradas
                         exportar_a_google_sheets("Entradas", df_entradas)
+
                         st.success("Entrada registrada correctamente.")
                         st.rerun()
         else:
