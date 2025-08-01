@@ -1256,49 +1256,49 @@ if "auditoria_diaria" in tab_dict:
                                             }
                                         )
                                     df_guardar = pd.DataFrame(filas_guardar)
-                                # Actualizar StockFisico
-                                df_stockfis = st.session_state["StockFisico"]
-                                df_stockfis = pd.concat(
-                                    [
-                                        df_stockfis,
-                                        df_guardar[["Fecha", "Producto", "Ubicación", "Turno", "Stock_Fisico"]],
-                                    ],
-                                    ignore_index=True,
-                                )
-                                st.session_state["StockFisico"] = df_stockfis
-                                exportar_a_google_sheets("StockFisico", df_stockfis)
-                                # Actualizar Auditoria_Diaria
-                                df_aud_diaria = st.session_state["Auditoria_Diaria"]
-                                df_aud_diaria = pd.concat([df_aud_diaria, df_guardar], ignore_index=True)
-                                st.session_state["Auditoria_Diaria"] = df_aud_diaria
-                                exportar_a_google_sheets("Auditoria_Diaria", df_aud_diaria)
-                                # Mostrar resumen visual
-                                st.success("Auditoría guardada correctamente. Resumen:")
-                                resumen = df_guardar[["Producto", "Ubicación", "Stock_Teorico", "Stock_Fisico", "Diferencia"]].copy()
-                                def colorear_dif(row):
-                                    return ["background-color: #ffcccc" if row["Diferencia"] != 0 else ""] * len(row)
-                                st.dataframe(resumen.style.apply(colorear_dif, axis=1), use_container_width=True)
-                                fig_diff = px.bar(
-                                    resumen,
-                                    x="Producto",
-                                    y="Diferencia",
-                                    color="Ubicación",
-                                    title="Diferencias de stock por producto",
-                                    labels={"Diferencia": "Diferencia (Físico - Teórico)"},
-                                    template="plotly_white",
-                                )
-                                fig_diff.update_layout(
-                                    xaxis_title="Producto",
-                                    yaxis_title="Diferencia",
-                                    margin=dict(l=40, r=20, t=50, b=40),
-                                )
-                                st.plotly_chart(fig_diff, use_container_width=True)
-                                # No se llama a st.rerun() aquí para permitir que el
-                                # usuario vea el resumen de auditoría guardado. Los
-                                # datos ya han sido exportados a Google Sheets y
-                                # permanecerán en el estado actual. Si el usuario
-                                # desea recargar los datos, puede utilizar el botón
-                                # "Actualizar datos" en la barra lateral.
+                                    # Actualizar StockFisico
+                                    df_stockfis = st.session_state["StockFisico"]
+                                    df_stockfis = pd.concat(
+                                        [
+                                            df_stockfis,
+                                            df_guardar[["Fecha", "Producto", "Ubicación", "Turno", "Stock_Fisico"]],
+                                        ],
+                                        ignore_index=True,
+                                    )
+                                    st.session_state["StockFisico"] = df_stockfis
+                                    exportar_a_google_sheets("StockFisico", df_stockfis)
+                                    # Actualizar Auditoria_Diaria
+                                    df_aud_diaria = st.session_state["Auditoria_Diaria"]
+                                    df_aud_diaria = pd.concat([df_aud_diaria, df_guardar], ignore_index=True)
+                                    st.session_state["Auditoria_Diaria"] = df_aud_diaria
+                                    exportar_a_google_sheets("Auditoria_Diaria", df_aud_diaria)
+                                    # Mostrar resumen visual
+                                    st.success("Auditoría guardada correctamente. Resumen:")
+                                    resumen = df_guardar[["Producto", "Ubicación", "Stock_Teorico", "Stock_Fisico", "Diferencia"]].copy()
+                                    def colorear_dif(row):
+                                        return ["background-color: #ffcccc" if row["Diferencia"] != 0 else ""] * len(row)
+                                    st.dataframe(resumen.style.apply(colorear_dif, axis=1), use_container_width=True)
+                                    fig_diff = px.bar(
+                                        resumen,
+                                        x="Producto",
+                                        y="Diferencia",
+                                        color="Ubicación",
+                                        title="Diferencias de stock por producto",
+                                        labels={"Diferencia": "Diferencia (Físico - Teórico)"},
+                                        template="plotly_white",
+                                    )
+                                    fig_diff.update_layout(
+                                        xaxis_title="Producto",
+                                        yaxis_title="Diferencia",
+                                        margin=dict(l=40, r=20, t=50, b=40),
+                                    )
+                                    st.plotly_chart(fig_diff, use_container_width=True)
+                                    # No se llama a st.rerun() aquí para permitir que el
+                                    # usuario vea el resumen de auditoría guardado. Los
+                                    # datos ya han sido exportados a Google Sheets y
+                                    # permanecerán en el estado actual. Si el usuario
+                                    # desea recargar los datos, puede utilizar el botón
+                                    # "Actualizar datos" en la barra lateral.
                     idx += 1
                 # ========================
                 # Subtab: Consultar auditorías
