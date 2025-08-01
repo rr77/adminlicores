@@ -250,7 +250,11 @@ def usuario_con_acceso(rol_requerido: list[str]) -> bool:
 # consultar varias auditorías en un mismo día. La columna Turno
 # tomará valores como ``Apertura`` o ``Cierre``.
 hojas_y_columnas = {
-    "Catalogo": ["Nombre", "Tipo", "ML", "Stock Min"],
+    # Se añade la columna "Categoria" al catálogo para clasificar los productos
+    # por familias o categorías (por ejemplo, Ron, Vino tinto, Cordiales, etc.).
+    # Esto permitirá filtrar y visualizar el stock por categoría en las
+    # distintas secciones de la aplicación.
+    "Catalogo": ["Nombre", "Tipo", "Categoria", "ML", "Stock Min"],
     "Inventario": ["Fecha", "Tipo", "Producto", "Cantidad", "Ubicación", "Usuario"],
     "Entradas": ["Fecha", "Producto", "Cantidad", "Usuario", "Ubicación"],
     "Salidas": ["Fecha", "Producto/Trago", "Cantidad", "Usuario", "Ubicación", "Tipo"],
@@ -386,21 +390,26 @@ if "panel" in tab_dict:
         if inventario_df.empty:
             st.info("Aún no se han registrado movimientos de inventario.")
         else:
-            # Calcular stock teórico y estados
+            # Calcular stock teórico por producto y ubicación
             stock_df = calcular_stock(inventario_df)
-            # Agregar estado según stock mínimo
+            # Agregar el estado de cada producto comparando el stock con el
+            # valor mínimo definido en el catálogo. Convertimos el valor
+            # mínimo a float antes de compararlo para evitar errores cuando
+            # la columna se carga como texto desde Google Sheets.
             estados = []
             for _, row in stock_df.iterrows():
                 prod = row["Producto"]
-                min_val = (
-                    catalogo_df.loc[catalogo_df["Nombre"] == prod, "Stock Min"].values
-                )
-                min_val = min_val[0] if len(min_val) > 0 else 0
-                if min_val == 0:
+                min_vals = catalogo_df.loc[catalogo_df["Nombre"] == prod, "Stock Min"].values
+                min_val = min_vals[0] if len(min_vals) > 0 else 0
+                try:
+                    min_val_float = float(min_val)
+                except (ValueError, TypeError):
+                    min_val_float = 0.0
+                if min_val_float == 0:
                     estados.append("Sin mínimo")
-                elif row["Stock"] < min_val:
+                elif row["Stock"] < min_val_float:
                     estados.append("Crítico")
-                elif row["Stock"] < min_val * 2:
+                elif row["Stock"] < min_val_float * 2:
                     estados.append("Bajo")
                 else:
                     estados.append("Suficiente")
@@ -477,6 +486,40 @@ if "panel" in tab_dict:
                 )
                 st.plotly_chart(fig_top, use_container_width=True)
 
+            # === Gráfico de stock por categoría ===
+            # Si el catálogo tiene la columna "Categoria", podemos
+            # agrupar el stock teórico por categoría y mostrarlo como un
+            # gráfico de barras. Esto ayuda a visualizar qué tipos de
+            # productos ocupan la mayor parte del inventario.
+            if "Categoria" in catalogo_df.columns:
+                # Asociar cada fila de stock_df con su categoría
+                # mediante un merge con el catálogo. Si no se encuentra
+                # categoría, se deja como "Sin categoría".
+                df_cat = stock_df.merge(
+                    catalogo_df[["Nombre", "Categoria"]],
+                    left_on="Producto",
+                    right_on="Nombre",
+                    how="left",
+                )
+                df_cat["Categoria"].fillna("Sin categoría", inplace=True)
+                df_cat_group = df_cat.groupby("Categoria", as_index=False)["Stock"].sum()
+                if not df_cat_group.empty:
+                    st.markdown("### 📦 Stock teórico por categoría")
+                    fig_cat = px.bar(
+                        df_cat_group,
+                        x="Categoria",
+                        y="Stock",
+                        title="Stock teórico por categoría",
+                        labels={"Stock": "Stock teórico", "Categoria": "Categoría"},
+                        template="plotly_white",
+                    )
+                    fig_cat.update_layout(
+                        xaxis_title="Categoría",
+                        yaxis_title="Stock",
+                        margin=dict(l=40, r=20, t=50, b=40),
+                    )
+                    st.plotly_chart(fig_cat, use_container_width=True)
+
 
 # ============================
 # Módulo: Catálogo
@@ -487,15 +530,27 @@ if "catalogo" in tab_dict:
         df_catalogo = st.session_state["Catalogo"]
         # Formulario para añadir producto (solo admin o almacenista pueden agregar)
         if st.session_state.get("rol") in ["admin", "almacenista"]:
+            # Formulario para agregar un producto al catálogo. Se divide en
+            # tres columnas para capturar el nombre, tipo y categoría del
+            # producto, y dos columnas adicionales para la capacidad y el
+            # stock mínimo. Esto permite especificar una categoría o familia
+            # (por ejemplo, Ron, Vino tinto, Cordiales), que luego se
+            # utiliza para filtrar y generar métricas.
             with st.form("form_catalogo"):
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     nombre = st.text_input("Nombre del producto", value="")
-                    tipo = st.selectbox("Tipo", ["Botella", "Trago", "Ingrediente"])
                 with col2:
+                    tipo = st.selectbox("Tipo", ["Botella", "Trago", "Ingrediente"])
+                with col3:
+                    categoria = st.text_input("Categoría (familia)", value="")
+
+                col4, col5 = st.columns(2)
+                with col4:
                     capacidad_ml = st.number_input(
                         "Capacidad (ml)", min_value=0, step=50, value=0, help="Mililitros por unidad"
                     )
+                with col5:
                     stock_minimo = st.number_input(
                         "Stock mínimo (opcional)", min_value=0, step=1, value=0
                     )
@@ -504,16 +559,16 @@ if "catalogo" in tab_dict:
                     if not nombre:
                         st.warning("Debes indicar el nombre del producto.")
                     else:
-                        nuevo = pd.DataFrame(
-                            [
-                                {
-                                    "Nombre": nombre,
-                                    "Tipo": tipo,
-                                    "ML": capacidad_ml,
-                                    "Stock Min": stock_minimo,
-                                }
-                            ]
-                        )
+                        # Crear un nuevo registro para el catálogo incluyendo la categoría
+                        nuevo = pd.DataFrame([
+                            {
+                                "Nombre": nombre,
+                                "Tipo": tipo,
+                                "Categoria": categoria,
+                                "ML": capacidad_ml,
+                                "Stock Min": stock_minimo,
+                            }
+                        ])
                         st.session_state["Catalogo"] = pd.concat(
                             [df_catalogo, nuevo], ignore_index=True
                         )
@@ -959,6 +1014,19 @@ if "stock" in tab_dict:
             )
             if ubic_seleccion:
                 stock_df = stock_df[stock_df["Ubicación"].isin(ubic_seleccion)]
+            # Permitir filtrar por categoría si está disponible en el catálogo.
+            # La columna "Categoria" se añadió al catálogo para clasificar los
+            # productos. Aquí se permite seleccionar una o varias categorías
+            # para filtrar el stock.
+            if "Categoria" in catalogo_df.columns:
+                categorias_disponibles = [c for c in catalogo_df["Categoria"].dropna().unique() if c != ""]
+                if categorias_disponibles:
+                    cat_seleccion = st.multiselect(
+                        "Filtrar por categoría", categorias_disponibles
+                    )
+                    if cat_seleccion:
+                        productos_cat = catalogo_df[catalogo_df["Categoria"].isin(cat_seleccion)]["Nombre"]
+                        stock_df = stock_df[stock_df["Producto"].isin(productos_cat)]
             # Calcular estado en función del stock mínimo
             def calcular_estado(stock, minimo):
                 if minimo == 0:
@@ -973,13 +1041,24 @@ if "stock" in tab_dict:
             estados = []
             for _, row in stock_df.iterrows():
                 prod = row["Producto"]
-                min_val = (
-                    catalogo_df.loc[catalogo_df["Nombre"] == prod, "Stock Min"].values
-                )
-                min_val = min_val[0] if len(min_val) > 0 else 0
-                estados.append(calcular_estado(row["Stock"], min_val))
+                min_vals = catalogo_df.loc[catalogo_df["Nombre"] == prod, "Stock Min"].values
+                min_val = min_vals[0] if len(min_vals) > 0 else 0
+                # Convertir a número para evitar comparaciones entre cadena y float
+                try:
+                    min_val_float = float(min_val)
+                except (ValueError, TypeError):
+                    min_val_float = 0.0
+                estados.append(calcular_estado(row["Stock"], min_val_float))
             stock_df = stock_df.copy()
             stock_df["Estado"] = estados
+            # Añadir columna de categoría al stock para mostrarla en la tabla.
+            # Se utiliza el método map para asociar cada producto con su
+            # categoría definida en el catálogo. Si no se encuentra,
+            # aparecerá como NaN.
+            if "Categoria" in catalogo_df.columns:
+                stock_df["Categoria"] = stock_df["Producto"].map(
+                    catalogo_df.set_index("Nombre")["Categoria"]
+                )
             # Estilo para resaltar estados
             def estilizar_fila(row):
                 estado = row["Estado"]
@@ -1072,9 +1151,17 @@ if "auditoria_diaria" in tab_dict:
                         if df_teo.empty:
                             st.info("No hay stock en la ubicación seleccionada.")
                         else:
-                            # Mostrar cada producto con su stock teórico y un campo para el stock físico.
+                            # Recuperar el catálogo para asociar productos con categorías
+                            catalogo_df = st.session_state["Catalogo"]
+                            # Campo de búsqueda para filtrar productos al registrar el stock físico.
+                            filtro_producto = st.text_input("Buscar producto", "")
+                            if filtro_producto:
+                                df_teo_iter = df_teo[df_teo["Producto"].str.contains(filtro_producto, case=False, na=False)].copy()
+                            else:
+                                df_teo_iter = df_teo.copy()
+                            # Mostrar cada producto filtrado con su stock teórico y un campo para el stock físico.
                             valores_fisicos = {}
-                            for i, fila in df_teo.iterrows():
+                            for i, fila in df_teo_iter.reset_index().iterrows():
                                 prod = fila["Producto"]
                                 ubic = fila["Ubicación"]
                                 teorico = float(fila["Stock"])
@@ -1094,12 +1181,15 @@ if "auditoria_diaria" in tab_dict:
                             if guardar_submit:
                                 # Construir los datos a guardar
                                 filas_guardar = []
-                                for idx2, fila in df_teo.iterrows():
+                                for idx2, fila in df_teo_iter.reset_index().iterrows():
                                     teorico = float(fila["Stock"])
                                     fisico = st.session_state.get(
                                         f"aud_fisico_{fecha_audit}_{turno}_{fila['Ubicación']}_{fila['Producto']}_{idx2}",
                                         teorico,
                                     )
+                                    # Determinar la categoría del producto para incluirla en la auditoría.
+                                    cat_df = catalogo_df.loc[catalogo_df["Nombre"] == fila["Producto"], "Categoria"]
+                                    categoria_val = cat_df.values[0] if len(cat_df) > 0 else None
                                     filas_guardar.append(
                                         {
                                             "Fecha": fecha_audit,
@@ -1109,6 +1199,7 @@ if "auditoria_diaria" in tab_dict:
                                             "Stock_Teorico": teorico,
                                             "Stock_Fisico": fisico,
                                             "Diferencia": fisico - teorico,
+                                            "Categoria": categoria_val,
                                         }
                                     )
                                 df_guardar = pd.DataFrame(filas_guardar)
@@ -1130,10 +1221,20 @@ if "auditoria_diaria" in tab_dict:
                                 exportar_a_google_sheets("Auditoria_Diaria", df_aud_diaria)
                                 # Mostrar resumen visual
                                 st.success("Auditoría guardada correctamente. Resumen:")
-                                resumen = df_guardar[["Producto", "Ubicación", "Stock_Teorico", "Stock_Fisico", "Diferencia"]].copy()
+                                # Crear un resumen de la auditoría. Incluye la categoría si está disponible.
+                                columnas_resumen = ["Producto", "Ubicación", "Stock_Teorico", "Stock_Fisico", "Diferencia"]
+                                if "Categoria" in df_guardar.columns:
+                                    columnas_resumen.insert(1, "Categoria")
+                                resumen = df_guardar[columnas_resumen].copy()
                                 def colorear_dif(row):
-                                    return ["background-color: #ffcccc" if row["Diferencia"] != 0 else ""] * len(row)
-                                st.dataframe(resumen.style.apply(colorear_dif, axis=1), use_container_width=True)
+                                    return [
+                                        "background-color: #ffcccc" if row["Diferencia"] != 0 else ""
+                                    ] * len(row)
+                                st.dataframe(
+                                    resumen.style.apply(colorear_dif, axis=1),
+                                    use_container_width=True,
+                                )
+                                # Gráfico de diferencias por producto
                                 fig_diff = px.bar(
                                     resumen,
                                     x="Producto",
@@ -1149,6 +1250,24 @@ if "auditoria_diaria" in tab_dict:
                                     margin=dict(l=40, r=20, t=50, b=40),
                                 )
                                 st.plotly_chart(fig_diff, use_container_width=True)
+                                # Gráfico de diferencias por categoría si se dispone de la columna
+                                if "Categoria" in df_guardar.columns:
+                                    df_cat_diff = df_guardar.groupby("Categoria", as_index=False)["Diferencia"].sum()
+                                    st.markdown("### 📦 Diferencias por categoría")
+                                    fig_cat_diff = px.bar(
+                                        df_cat_diff,
+                                        x="Categoria",
+                                        y="Diferencia",
+                                        title="Diferencias de stock por categoría",
+                                        labels={"Diferencia": "Diferencia (Físico - Teórico)", "Categoria": "Categoría"},
+                                        template="plotly_white",
+                                    )
+                                    fig_cat_diff.update_layout(
+                                        xaxis_title="Categoría",
+                                        yaxis_title="Diferencia",
+                                        margin=dict(l=40, r=20, t=50, b=40),
+                                    )
+                                    st.plotly_chart(fig_cat_diff, use_container_width=True)
                                 # No se llama a st.rerun() aquí para permitir que el
                                 # usuario vea el resumen de auditoría guardado. Los
                                 # datos ya han sido exportados a Google Sheets y
@@ -1162,6 +1281,8 @@ if "auditoria_diaria" in tab_dict:
                 with sub_tabs[idx]:
                     st.markdown("#### Consultar auditorías anteriores")
                     df_auditoria = st.session_state["Auditoria_Diaria"]
+                    # Obtener el catálogo para asociar productos con sus categorías
+                    catalogo_df = st.session_state["Catalogo"]
                     if df_auditoria.empty:
                         st.info("No hay auditorías registradas.")
                     else:
@@ -1194,12 +1315,27 @@ if "auditoria_diaria" in tab_dict:
                         else:
                             # Ordenar para una mejor visualización
                             filtro_orden = filtro.sort_values(by=["Producto", "Ubicación"])
-                            # Mostrar tabla de auditoría
+                            # Añadir la categoría si está disponible en el catálogo
+                            if "Categoria" in catalogo_df.columns:
+                                filtro_orden = filtro_orden.copy()
+                                filtro_orden["Categoria"] = filtro_orden["Producto"].map(
+                                    catalogo_df.set_index("Nombre")["Categoria"]
+                                )
+                            # Definir las columnas a mostrar. Si existe "Categoria" se inserta después de "Producto".
+                            columnas_tabla = [
+                                "Fecha",
+                                "Turno",
+                                "Producto",
+                                "Ubicación",
+                                "Stock_Teorico",
+                                "Stock_Fisico",
+                                "Diferencia",
+                            ]
+                            if "Categoria" in filtro_orden.columns:
+                                columnas_tabla.insert(3, "Categoria")
+                            # Mostrar tabla de auditoría con categorías incluidas
                             st.dataframe(
-                                filtro_orden[
-                                    ["Fecha", "Turno", "Producto", "Ubicación", "Stock_Teorico", "Stock_Fisico", "Diferencia"]
-                                ],
-                                use_container_width=True,
+                                filtro_orden[columnas_tabla], use_container_width=True
                             )
                             # Mostrar gráfico de diferencias por producto
                             fig_hist = px.bar(
@@ -1207,8 +1343,8 @@ if "auditoria_diaria" in tab_dict:
                                 x="Producto",
                                 y="Diferencia",
                                 color="Ubicación",
-                                title="Diferencias por producto (auditoría seleccionada)",
-                                labels={"Diferencia": "Diferencia"},
+                                title="Diferencias de stock por producto",
+                                labels={"Diferencia": "Diferencia (Físico - Teórico)"},
                                 template="plotly_white",
                             )
                             fig_hist.update_layout(
@@ -1217,6 +1353,24 @@ if "auditoria_diaria" in tab_dict:
                                 margin=dict(l=40, r=20, t=50, b=40),
                             )
                             st.plotly_chart(fig_hist, use_container_width=True)
+                            # Mostrar gráfico de diferencias por categoría, si está disponible
+                            if "Categoria" in filtro_orden.columns:
+                                df_cat_hist = filtro_orden.groupby("Categoria", as_index=False)["Diferencia"].sum()
+                                st.markdown("### 📦 Diferencias por categoría")
+                                fig_cat_hist = px.bar(
+                                    df_cat_hist,
+                                    x="Categoria",
+                                    y="Diferencia",
+                                    title="Diferencias de stock por categoría",
+                                    labels={"Diferencia": "Diferencia (Físico - Teórico)", "Categoria": "Categoría"},
+                                    template="plotly_white",
+                                )
+                                fig_cat_hist.update_layout(
+                                    xaxis_title="Categoría",
+                                    yaxis_title="Diferencia",
+                                    margin=dict(l=40, r=20, t=50, b=40),
+                                )
+                                st.plotly_chart(fig_cat_hist, use_container_width=True)
 
 
 # ============================
