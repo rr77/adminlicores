@@ -1132,6 +1132,11 @@ if "auditoria_diaria" in tab_dict:
                         else:
                             # Mostrar cada producto con su stock teórico y un campo para el stock físico.
                             valores_fisicos = {}
+                        busqueda = st.text_input("Buscar producto", "")
+                        if busqueda:
+                            df_teo_iter = df_teo[df_teo["Producto"].str.contains(busqueda, case=False, na=False)].copy()
+                        else:
+                            df_teo_iter = df_teo.copy()
                             for i, fila in df_teo.iterrows():
                                 prod = fila["Producto"]
                                 ubic = fila["Ubicación"]
@@ -1142,8 +1147,9 @@ if "auditoria_diaria" in tab_dict:
                                 with colt:
                                     valores_fisicos[f"fisico_{i}"] = st.number_input(
                                         "",
-                                        value=teorico,
-                                        step=0.1,
+                                        value=0,
+                                        step=1,
+                                        format="%d"
                                         min_value=None,
                                         key=f"aud_fisico_{fecha_audit}_{turno}_{ubic}_{prod}_{i}"
                                     )
