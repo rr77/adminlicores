@@ -250,7 +250,8 @@ def usuario_con_acceso(rol_requerido: list[str]) -> bool:
 # consultar varias auditorías en un mismo día. La columna Turno
 # tomará valores como ``Apertura`` o ``Cierre``.
 hojas_y_columnas = {
-    "Catalogo": ["Nombre", "Tipo", "ML", "Stock Min"],
+    # Se añade la columna "Categoria" para permitir clasificar cada producto por familia o categoría.
+    "Catalogo": ["Nombre", "Tipo", "Categoria", "ML", "Stock Min"],
     "Inventario": ["Fecha", "Tipo", "Producto", "Cantidad", "Ubicación", "Usuario"],
     "Entradas": ["Fecha", "Producto", "Cantidad", "Usuario", "Ubicación"],
     "Salidas": ["Fecha", "Producto/Trago", "Cantidad", "Usuario", "Ubicación", "Tipo"],
@@ -386,36 +387,39 @@ if "panel" in tab_dict:
         if inventario_df.empty:
             st.info("Aún no se han registrado movimientos de inventario.")
         else:
-            # Calcular stock teórico por producto y ubicación
+            # Calcular stock teórico y estados
             stock_df = calcular_stock(inventario_df)
-            # Determinar el estado de cada producto usando el stock mínimo.
+            # Agregar estado según stock mínimo
             estados = []
             for _, row in stock_df.iterrows():
                 prod = row["Producto"]
+                # Recuperar el mínimo desde el catálogo. Puede venir como texto y
+                # convertirse a número para evitar comparaciones entre tipos incompatibles.
                 min_vals = catalogo_df.loc[catalogo_df["Nombre"] == prod, "Stock Min"].values
                 min_val = min_vals[0] if len(min_vals) > 0 else 0
+                # Convertir a número; si falla, asumir cero (sin mínimo)
                 try:
-                    min_val_f = float(min_val)
+                    min_val_num = float(min_val)
                 except (ValueError, TypeError):
-                    min_val_f = 0.0
-                if min_val_f == 0:
+                    min_val_num = 0.0
+                if min_val_num == 0:
                     estados.append("Sin mínimo")
-                elif row["Stock"] < min_val_f:
+                elif row["Stock"] < min_val_num:
                     estados.append("Crítico")
-                elif row["Stock"] < min_val_f * 2:
+                elif row["Stock"] < min_val_num * 2:
                     estados.append("Bajo")
                 else:
                     estados.append("Suficiente")
             stock_df = stock_df.copy()
             stock_df["Estado"] = estados
-            # Contar productos por estado
+            # Contar por estado
             conteo_estados = stock_df["Estado"].value_counts().to_dict()
             total_items = len(stock_df)
             criticos = conteo_estados.get("Crítico", 0)
             bajos = conteo_estados.get("Bajo", 0)
             suficientes = conteo_estados.get("Suficiente", 0)
             sinmin = conteo_estados.get("Sin mínimo", 0)
-            # Mostrar métricas
+            # Mostrar métricas en columnas
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Total registros", total_items)
             m2.metric("Críticos", criticos)
@@ -426,16 +430,16 @@ if "panel" in tab_dict:
             if not df_alertas.empty:
                 st.markdown("### 🛑 Productos con stock crítico o bajo")
                 def color_alerta(row):
-                    return [
-                        "background-color: #ffcccc" if row["Estado"] == "Crítico" else "background-color: #fff2cc"
-                    ] * len(row)
+                    return ["background-color: #ffcccc" if row["Estado"] == "Crítico" else "background-color: #fff2cc"] * len(row)
                 st.dataframe(df_alertas.style.apply(color_alerta, axis=1), use_container_width=True)
             else:
                 st.success("No hay productos en estado crítico ni bajo.")
             # Gráfico diario de entradas y salidas
             inventario_df["Fecha_dt"] = pd.to_datetime(inventario_df["Fecha"])
             inventario_df["Día"] = inventario_df["Fecha_dt"].dt.date
-            df_diario = inventario_df.groupby(["Día", "Tipo"], as_index=False)["Cantidad"].sum()
+            df_diario = (
+                inventario_df.groupby(["Día", "Tipo"], as_index=False)["Cantidad"].sum()
+            )
             st.markdown("### 📅 Entradas y Salidas por Día")
             fig_diario = px.bar(
                 df_diario,
@@ -477,24 +481,31 @@ if "panel" in tab_dict:
                     yaxis_title="Cantidad (abs)",
                     margin=dict(l=40, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_top, use_container_width=True)
-            # Gráfico de stock por categoría
+            st.plotly_chart(fig_top, use_container_width=True)
+
+            # ==== Nuevos gráficos de stock por categoría y tipo ====
+            # Si el catálogo tiene una columna "Categoria", mostrar el stock teórico
+            # agrupado por categoría. Esto permite ver de un vistazo qué familias
+            # de productos tienen mayor o menor inventario.
             if "Categoria" in catalogo_df.columns:
-                df_cat = stock_df.merge(
-                    catalogo_df[["Nombre", "Categoria"]].drop_duplicates(subset=["Nombre"]),
+                st.markdown("### 🧮 Stock teórico por categoría")
+                stock_cat = stock_df.merge(
+                    catalogo_df[["Nombre", "Categoria"]],
                     left_on="Producto",
                     right_on="Nombre",
                     how="left",
                 )
-                df_cat["Categoria"] = df_cat["Categoria"].fillna("Sin categoría")
-                df_cat_group = df_cat.groupby("Categoria", as_index=False)["Stock"].sum()
-                if not df_cat_group.empty:
-                    st.markdown("### 📦 Stock teórico por categoría")
+                cat_summary = (
+                    stock_cat.groupby("Categoria", as_index=False)["Stock"]
+                    .sum()
+                    .sort_values(by="Stock", ascending=False)
+                )
+                if not cat_summary.empty:
                     fig_cat = px.bar(
-                        df_cat_group,
+                        cat_summary,
                         x="Categoria",
                         y="Stock",
-                        title="Stock teórico por categoría",
+                        title="Stock por categoría",
                         labels={"Stock": "Stock teórico", "Categoria": "Categoría"},
                         template="plotly_white",
                     )
@@ -504,6 +515,36 @@ if "panel" in tab_dict:
                         margin=dict(l=40, r=20, t=50, b=40),
                     )
                     st.plotly_chart(fig_cat, use_container_width=True)
+
+            # Mostrar stock por tipo de producto (Botella/Trago/Ingrediente) si está disponible.
+            if "Tipo" in catalogo_df.columns:
+                st.markdown("### 📂 Stock teórico por tipo de artículo")
+                stock_tipo = stock_df.merge(
+                    catalogo_df[["Nombre", "Tipo"]],
+                    left_on="Producto",
+                    right_on="Nombre",
+                    how="left",
+                )
+                tipo_summary = (
+                    stock_tipo.groupby("Tipo", as_index=False)["Stock"]
+                    .sum()
+                    .sort_values(by="Stock", ascending=False)
+                )
+                if not tipo_summary.empty:
+                    fig_tipo = px.bar(
+                        tipo_summary,
+                        x="Tipo",
+                        y="Stock",
+                        title="Stock por tipo",
+                        labels={"Stock": "Stock teórico", "Tipo": "Tipo"},
+                        template="plotly_white",
+                    )
+                    fig_tipo.update_layout(
+                        xaxis_title="Tipo",
+                        yaxis_title="Stock",
+                        margin=dict(l=40, r=20, t=50, b=40),
+                    )
+                    st.plotly_chart(fig_tipo, use_container_width=True)
 
 
 # ============================
@@ -515,10 +556,8 @@ if "catalogo" in tab_dict:
         df_catalogo = st.session_state["Catalogo"]
         # Formulario para añadir producto (solo admin o almacenista pueden agregar)
         if st.session_state.get("rol") in ["admin", "almacenista"]:
-            # Se divide en tres columnas para capturar el nombre, tipo y categoría, y dos columnas
-            # para la capacidad y el stock mínimo. La categoría permite agrupar los productos
-            # por familias (por ejemplo, Ron, Vino, Cordiales).
             with st.form("form_catalogo"):
+                # Tres columnas para nombre, tipo y categoría
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     nombre = st.text_input("Nombre del producto", value="")
@@ -526,29 +565,41 @@ if "catalogo" in tab_dict:
                     tipo = st.selectbox("Tipo", ["Botella", "Trago", "Ingrediente"])
                 with col3:
                     categoria = st.text_input("Categoría (familia)", value="")
+                # Segunda fila: capacidad y stock mínimo
                 col4, col5 = st.columns(2)
                 with col4:
                     capacidad_ml = st.number_input(
-                        "Capacidad (ml)", min_value=0, step=50, value=0, help="Mililitros por unidad"
+                        "Capacidad (ml)",
+                        min_value=0,
+                        step=50,
+                        value=0,
+                        help="Mililitros por unidad",
+                        format="%d",
                     )
                 with col5:
                     stock_minimo = st.number_input(
-                        "Stock mínimo (opcional)", min_value=0, step=1, value=0
+                        "Stock mínimo (opcional)",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        format="%d",
                     )
                 submitted = st.form_submit_button("Agregar al Catálogo")
                 if submitted:
                     if not nombre:
                         st.warning("Debes indicar el nombre del producto.")
                     else:
-                        nuevo = pd.DataFrame([
-                            {
-                                "Nombre": nombre,
-                                "Tipo": tipo,
-                                "Categoria": categoria,
-                                "ML": capacidad_ml,
-                                "Stock Min": stock_minimo,
-                            }
-                        ])
+                        nuevo = pd.DataFrame(
+                            [
+                                {
+                                    "Nombre": nombre,
+                                    "Tipo": tipo,
+                                    "Categoria": categoria,
+                                    "ML": capacidad_ml,
+                                    "Stock Min": stock_minimo,
+                                }
+                            ]
+                        )
                         st.session_state["Catalogo"] = pd.concat(
                             [df_catalogo, nuevo], ignore_index=True
                         )
@@ -581,7 +632,11 @@ if "entradas" in tab_dict:
                         )
                     with col2:
                         cantidad = st.number_input(
-                            "Cantidad (botellas/unidades)", min_value=0.1, value=1.0
+                            "Cantidad (botellas/unidades)",
+                            min_value=1,
+                            step=1,
+                            value=1,
+                            format="%d",
                         )
                     with col3:
                         ubicacion = st.selectbox(
@@ -641,7 +696,11 @@ if "transferencias" in tab_dict:
                         )
                     with col2:
                         cantidad = st.number_input(
-                            "Cantidad a transferir", min_value=0.1, value=1.0, step=0.1
+                            "Cantidad a transferir",
+                            min_value=1,
+                            step=1,
+                            value=1,
+                            format="%d",
                         )
                     with col3:
                         origen = st.selectbox(
@@ -729,7 +788,11 @@ if "devoluciones" in tab_dict:
                         )
                     with col2:
                         cantidad = st.number_input(
-                            "Cantidad devuelta", min_value=0.1, value=1.0, step=0.1
+                            "Cantidad devuelta",
+                            min_value=1,
+                            step=1,
+                            value=1,
+                            format="%d",
                         )
                     # Selección de ubicaciones de origen y destino
                     col_loc1, col_loc2 = st.columns(2)
@@ -837,8 +900,12 @@ if "salidas" in tab_dict:
                         "Producto", catalogo["Nombre"].unique(), key="salida_botella_prod"
                     )
                     cantidad = st.number_input(
-                        "Cantidad de botellas", min_value=0.1, step=0.1, value=1.0,
-                        key="salida_botella_cant"
+                        "Cantidad de botellas",
+                        min_value=1,
+                        step=1,
+                        value=1,
+                        format="%d",
+                        key="salida_botella_cant",
                     )
                     ubicacion = st.selectbox(
                         "Ubicación", UBICACIONES, key="salida_botella_ubic"
@@ -988,26 +1055,16 @@ if "stock" in tab_dict:
             st.info("Aún no se han registrado movimientos de inventario.")
         else:
             stock_df = calcular_stock(inventario_df)
+            # Redondear el stock a un decimal para una mejor presentación
+            if not stock_df.empty:
+                stock_df["Stock"] = stock_df["Stock"].astype(float).round(1)
             # Permitir filtrar por ubicación
             ubic_seleccion = st.multiselect(
                 "Filtrar por ubicación", UBICACIONES, default=UBICACIONES
             )
             if ubic_seleccion:
                 stock_df = stock_df[stock_df["Ubicación"].isin(ubic_seleccion)]
-
-            # Permitir filtrar por categoría si está disponible en el catálogo
-            catalogo_df = st.session_state["Catalogo"]
-            if "Categoria" in catalogo_df.columns:
-                categorias_disponibles = [c for c in catalogo_df["Categoria"].dropna().unique() if c != ""]
-                if categorias_disponibles:
-                    cat_sel = st.multiselect(
-                        "Filtrar por categoría", categorias_disponibles
-                    )
-                    if cat_sel:
-                        prods_cat = catalogo_df[catalogo_df["Categoria"].isin(cat_sel)]["Nombre"]
-                        stock_df = stock_df[stock_df["Producto"].isin(prods_cat)]
-
-            # Calcular estado en función del stock mínimo (convertir a float para evitar errores)
+            # Calcular estado en función del stock mínimo
             def calcular_estado(stock, minimo):
                 if minimo == 0:
                     return "Sin mínimo"
@@ -1017,27 +1074,38 @@ if "stock" in tab_dict:
                     return "Bajo"
                 else:
                     return "Suficiente"
-
+            catalogo_df = st.session_state["Catalogo"]
             estados = []
+            # Si existe una columna Categoria en el catálogo, asignarla al stock y permitir filtrar
+            if "Categoria" in catalogo_df.columns:
+                cat_map = (
+                    catalogo_df.drop_duplicates(subset=["Nombre"])
+                    .set_index("Nombre")["Categoria"]
+                    .to_dict()
+                )
+                stock_df["Categoria"] = stock_df["Producto"].map(cat_map)
+                categorias_disponibles = sorted(
+                    [c for c in stock_df["Categoria"].dropna().unique()]
+                )
+                if categorias_disponibles:
+                    categoria_sel = st.multiselect(
+                        "Filtrar por categoría",
+                        categorias_disponibles,
+                        default=categorias_disponibles,
+                    )
+                    stock_df = stock_df[stock_df["Categoria"].isin(categoria_sel)]
             for _, row in stock_df.iterrows():
                 prod = row["Producto"]
                 min_vals = catalogo_df.loc[catalogo_df["Nombre"] == prod, "Stock Min"].values
                 min_val = min_vals[0] if len(min_vals) > 0 else 0
+                # Convertir el mínimo a número. Si falla, usar 0.
                 try:
-                    min_val_float = float(min_val)
+                    min_val_num = float(min_val)
                 except (ValueError, TypeError):
-                    min_val_float = 0.0
-                estados.append(calcular_estado(row["Stock"], min_val_float))
+                    min_val_num = 0.0
+                estados.append(calcular_estado(row["Stock"], min_val_num))
             stock_df = stock_df.copy()
             stock_df["Estado"] = estados
-            # Asociar categoría a cada producto en el stock. Se utiliza un
-            # mapeo con índice único para evitar errores cuando hay
-            # productos duplicados en el catálogo.
-            if "Categoria" in catalogo_df.columns:
-                categoria_map = (
-                    catalogo_df.drop_duplicates(subset=["Nombre"]).set_index("Nombre")["Categoria"]
-                )
-                stock_df["Categoria"] = stock_df["Producto"].map(categoria_map)
             # Estilo para resaltar estados
             def estilizar_fila(row):
                 estado = row["Estado"]
@@ -1130,52 +1198,62 @@ if "auditoria_diaria" in tab_dict:
                         if df_teo.empty:
                             st.info("No hay stock en la ubicación seleccionada.")
                         else:
-                            # Mostrar cada producto con su stock teórico y un campo para el stock físico.
-                            valores_fisicos = {}
-                        busqueda = st.text_input("Buscar producto", "")
-                        if busqueda:
-                            df_teo_iter = df_teo[df_teo["Producto"].str.contains(busqueda, case=False, na=False)].copy()
-                        else:
-                            df_teo_iter = df_teo.copy()
-                            for i, fila in df_teo.iterrows():
-                                prod = fila["Producto"]
-                                ubic = fila["Ubicación"]
-                                teorico = float(fila["Stock"])
-                                colp, colt = st.columns([3, 1])
-                                with colp:
-                                    st.write(f"**{prod} ({ubic})** - Teórico: {teorico}")
-                                with colt:
-                                    valores_fisicos[f"fisico_{i}"] = st.number_input(
-                                        "",
-                                        value=0,
-                                        step=1,
-                                        format="%d",
-                                        min_value=None,
-                                        key=f"aud_fisico_{fecha_audit}_{turno}_{ubic}_{prod}_{i}"
-                                    )
-                            # Botón para guardar la auditoría
-                            guardar_submit = st.button("Guardar auditoría", key=f"btn_guardar_aud_{fecha_audit}_{turno}")
-                            if guardar_submit:
-                                # Construir los datos a guardar
-                                filas_guardar = []
-                                for idx2, fila in df_teo.iterrows():
+                            # Añadir un cuadro de búsqueda para filtrar productos cuando el catálogo es grande
+                            busqueda = st.text_input("Buscar producto", value="")
+                            if busqueda:
+                                df_teo_iter = df_teo[
+                                    df_teo["Producto"].str.contains(busqueda, case=False, na=False)
+                                ].copy()
+                            else:
+                                df_teo_iter = df_teo.copy()
+                            if df_teo_iter.empty:
+                                st.info("No hay productos que coincidan con la búsqueda.")
+                            else:
+                                # Mostrar cada producto con su stock teórico y un campo para el stock físico.
+                                valores_fisicos = {}
+                                for idx_a, fila in df_teo_iter.iterrows():
+                                    prod = fila["Producto"]
+                                    ubic = fila["Ubicación"]
                                     teorico = float(fila["Stock"])
-                                    fisico = st.session_state.get(
-                                        f"aud_fisico_{fecha_audit}_{turno}_{fila['Ubicación']}_{fila['Producto']}_{idx2}",
-                                        teorico,
-                                    )
-                                    filas_guardar.append(
-                                        {
-                                            "Fecha": fecha_audit,
-                                            "Producto": fila["Producto"],
-                                            "Ubicación": fila["Ubicación"],
-                                            "Turno": turno,
-                                            "Stock_Teorico": teorico,
-                                            "Stock_Fisico": fisico,
-                                            "Diferencia": fisico - teorico,
-                                        }
-                                    )
-                                df_guardar = pd.DataFrame(filas_guardar)
+                                    colp, colt = st.columns([3, 1])
+                                    with colp:
+                                        st.write(f"**{prod} ({ubic})** - Teórico: {teorico}")
+                                    with colt:
+                                        # Usar 0 como valor inicial y forzar números enteros para el conteo físico
+                                        valores_fisicos[f"fisico_{idx_a}"] = st.number_input(
+                                            "",
+                                            value=0,
+                                            min_value=0,
+                                            step=1,
+                                            format="%d",
+                                            key=f"aud_fisico_{fecha_audit}_{turno}_{ubic}_{prod}_{idx_a}",
+                                        )
+                                # Botón para guardar la auditoría
+                                guardar_submit = st.button(
+                                    "Guardar auditoría",
+                                    key=f"btn_guardar_aud_{fecha_audit}_{turno}",
+                                )
+                                if guardar_submit:
+                                    # Construir los datos a guardar
+                                    filas_guardar = []
+                                    for idx_b, fila in df_teo_iter.iterrows():
+                                        teorico = float(fila["Stock"])
+                                        fisico = st.session_state.get(
+                                            f"aud_fisico_{fecha_audit}_{turno}_{fila['Ubicación']}_{fila['Producto']}_{idx_b}",
+                                            0,
+                                        )
+                                        filas_guardar.append(
+                                            {
+                                                "Fecha": fecha_audit,
+                                                "Producto": fila["Producto"],
+                                                "Ubicación": fila["Ubicación"],
+                                                "Turno": turno,
+                                                "Stock_Teorico": teorico,
+                                                "Stock_Fisico": fisico,
+                                                "Diferencia": fisico - teorico,
+                                            }
+                                        )
+                                    df_guardar = pd.DataFrame(filas_guardar)
                                 # Actualizar StockFisico
                                 df_stockfis = st.session_state["StockFisico"]
                                 df_stockfis = pd.concat(
