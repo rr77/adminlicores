@@ -64,9 +64,12 @@ def conectar_google_sheets():
     parámetros cambian, reinicie la aplicación (``Clear Cache``) para
     que se reconecte.
     """
-    creds = Credentials.from_service_account_file(
-        CREDENTIALS_PATH, scopes=SCOPE
-    )
+    # Antes hacía esto:
+    # creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPE)
+
+    # Ahora cargamos las credenciales desde los secretos de Streamlit:
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+
     client = gspread.authorize(creds)
     sheet = client.open(SPREADSHEET_NAME)
     return sheet
